@@ -152,15 +152,18 @@ def _fast_eligible(query, key, value, attn_mask, dropout_p, is_causal,
     return True
 
 
-def _materialize_p(query, key, lse, is_causal, scale, attn_mask=None):
+def _materialize_p(query, key, lse, is_causal, scale, bias=None):
     """P = exp(scale·QKᵀ − LSE)，fp32 中间计算，mask/causal 显式置 0。"""
     sq = query.shape[-2]
     # 实测无 pad；防御性切片，兼容未来 vendor 变更
     if lse.shape[-1] > sq:
         lse = lse[..., :sq]
 
-    scores = torch.matmul(query, key.transpose(-1, -2)).float()
-    scores = scores * scale - lse.unsqueeze(-1)
+    scores = torch.matmul(query.float(), key.float().transpose(-1, -2))
+    scores = scores * scale
+    if bias is not None:
+        scores = scores + bias.float()
+    scores = scores - lse.float().unsqueeze(-1)
     P = scores.exp()
 
     if is_causal:
@@ -168,14 +171,13 @@ def _materialize_p(query, key, lse, is_causal, scale, attn_mask=None):
         causal = torch.ones((sq, skv), dtype=torch.bool,
                             device=P.device).tril()
         P = P.masked_fill(~causal, 0.0)
-    if attn_mask is not None:
-        if attn_mask.dtype == torch.bool:
-            P = P.masked_fill(~attn_mask, 0.0)
-        else:
-            P = P.masked_fill(torch.isneginf(attn_mask), 0.0)
 
     # 全遮蔽行 exp(-inf - (-inf)) = NaN → 归 0（aten math 语义）
-    P = torch.nan_to_num(P, nan=0.0, posinf=0.0, neginf=0.0)
+    P = torch.where(torch.isnan(P), torch.zeros_like(P), P)
+    if not torch.isfinite(P).all():
+        raise RuntimeError(
+            "P 中出现非有限值（inf）；bias=-inf 位置应为 0，"
+            "有限位置不应溢出。请检查 QK 溢出或 mask 语义。")
     return P.to(query.dtype)
 
 
@@ -276,7 +278,7 @@ def sdpa_math_mlu590_fast(
     output, lse = r[0], r[1]
 
     probs = _materialize_p(
-        query_exp, key_exp, lse, is_causal, actual_scale, attn_mask=attn_mask,
+        query_exp, key_exp, lse, is_causal, actual_scale, bias=bias,
     )
     output = _restore_full_mask_zero(
         query_exp, key_exp, output, attn_mask, is_causal,
