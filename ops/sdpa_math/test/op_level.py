@@ -149,6 +149,45 @@ def run(profile):
     check("A1 包装 = 直接调 impl（逐位）",
           torch.equal(out1, d_out) and torch.equal(p1, d_p))
 
+    # ── 3b) MLU590 fast path: fp16/bf16 显式覆盖（评审 P2-1）──
+    # fast path 的 _fast_eligible 只接 fp16/bf16；默认 _mk 是 fp32，
+    # 不显式覆盖的话会全部 fallback 到 sdpa_math_torch，证明不了 fast
+    # path 正确。direct requires_grad 按设计回退 torch，故 req_grad=False。
+    if profile.default_impl == "mlu590":
+        from kernel.mlu590_fast_level import _fast_eligible
+        for dt in (torch.float16, torch.bfloat16):
+            dt_name = str(dt).split(".")[-1]
+            qf, kf, vf, _ = _mk(1, 4, 4, 64, 64, dev, seed=31,
+                                dtype=dt, req_grad=False)
+            elig = _fast_eligible(qf, kf, vf, None, 0.0, False, None, None)
+            check(f"MLU fast eligible: {dt_name}", elig)
+            if not elig:
+                continue
+
+            d_out, d_p = sdpa_math_mlu590_fast(qf, kf, vf)
+            r_out, r_p = sdpa_math_torch(qf, kf, vf)
+            eo_f = (d_out.float() - r_out.float()).abs().max().item()
+            ep_f = (d_p.float() - r_p.float()).abs().max().item()
+            rs = d_p.float().sum(-1)
+            check(f"MLU fast direct out/P: {dt_name}",
+                  max(eo_f, ep_f) < 2e-2,
+                  f"out={eo_f:.2e} P={ep_f:.2e}")
+            check(f"MLU fast P row_sum: {dt_name}",
+                  bool(((rs - 1).abs() < 1e-3).all()),
+                  f"min={rs.min():.4f} max={rs.max():.4f}")
+
+            n0 = ctr_main["n"]
+            with torch.no_grad():
+                _op(qf, kf, vf, None, 0.0, False, None)
+            check(f"MLU fast no_grad 拦截: {dt_name}",
+                  ctr_main["n"] > n0, f"+{ctr_main['n'] - n0}")
+
+            n0 = ctr_main["n"]
+            with torch.inference_mode():
+                _op(qf, kf, vf, None, 0.0, False, None)
+            check(f"MLU fast inference_mode 拦截: {dt_name}",
+                  ctr_main["n"] > n0, f"+{ctr_main['n'] - n0}")
+
     # ── 4) autograd: grad_fn + backward + 梯度 = 参考图反传 ──
     qa, ka, va, ma = _mk(1, 4, 4, 48, 48, dev, seed=3, mask="float")
     # float mask 与 causal 互斥（native 冲突规则，不论 mask 类型）
