@@ -197,17 +197,19 @@ def run(profile):
         # A1 的 forward 以 dropout_p=0 调 fast path 拿 P，Function 层施加
         # dropout 再用 P 重算 O。这里构造 dropout_p>0 的 A1 调用，显式传
         # dropout_mask 保证确定性，对比 torch reference。
-        qd, kd, vd, _ = _mk(1, 4, 4, 64, 64, dev, seed=41,
-                            dtype=torch.float16, req_grad=False)
-        dm = make_dropout_mask((1, 4, 64, 64), 0.3, dev)
-        d_out, d_p = _op(qd, kd, vd, None, 0.3, False, dm)
-        r_out, r_p = sdpa_math_torch(
-            qd, kd, vd, None, 0.3, False, dm)
-        eo_d = (d_out.float() - r_out.float()).abs().max().item()
-        ep_d = (d_p.float() - r_p.float()).abs().max().item()
-        check("MLU fast A1+dropout 消费 P: float16",
-              max(eo_d, ep_d) < 2e-2,
-              f"out={eo_d:.2e} P={ep_d:.2e}")
+        for dt in (torch.float16, torch.bfloat16):
+            dt_name = str(dt).split(".")[-1]
+            qd, kd, vd, _ = _mk(1, 4, 4, 64, 64, dev, seed=41,
+                                dtype=dt, req_grad=False)
+            dm = make_dropout_mask((1, 4, 64, 64), 0.3, dev)
+            d_out, d_p = _op(qd, kd, vd, None, 0.3, False, dm)
+            r_out, r_p = sdpa_math_torch(
+                qd, kd, vd, None, 0.3, False, dm)
+            eo_d = (d_out.float() - r_out.float()).abs().max().item()
+            ep_d = (d_p.float() - r_p.float()).abs().max().item()
+            check(f"MLU fast A1+dropout 消费 P: {dt_name}",
+                  max(eo_d, ep_d) < 2e-2,
+                  f"out={eo_d:.2e} P={ep_d:.2e}")
 
         # ── 3d) overflow 场景两路梯度（走 A1）──
         # direct requires_grad 按设计 fallback torch，故走 A1：
