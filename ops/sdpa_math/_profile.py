@@ -113,7 +113,7 @@ def load_profile(name: str | None = None) -> LocalProfile:
         )
     raise ValueError(
         f"未知设备 profile: {name}"
-        f"（内置 cpu / ascend910 / p800-kunlunxin / thead-p / mlupu）")
+        f"（内置 cpu / ascend910 / p800-kunlunxin / thead-ppu / mlu）")
 
 
 def detect_profile() -> LocalProfile:
