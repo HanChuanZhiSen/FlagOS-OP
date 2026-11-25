@@ -125,6 +125,20 @@ def perf_cases(profile):
             PerfCase("ops.sdpa_math.native", group="ops", level="kernel",
                      make_fn=make(native), derived=tflops, iters=50),
         ]
+    if profile.vendor == "cambricon":
+        import torch
+        mlu_fn = _load_by_path(
+            "kernel/mlu590_fast_level.py", "sdpa_math_mlu590_fast")
+
+        def native(q, k, v, *args, **kwargs):
+            return torch.ops.aten._scaled_dot_product_attention_math(
+                q, k, v, *args, **kwargs)
+        return [
+            PerfCase("ops.sdpa_math.mlu590", group="ops", level="kernel",
+                     make_fn=make(mlu_fn), derived=tflops, iters=50),
+            PerfCase("ops.sdpa_math.native", group="ops", level="kernel",
+                     make_fn=make(native), derived=tflops, iters=50),
+        ]
 
     triton = _load_by_path("kernel/triton_level.py", "sdpa_math_triton")
     return [
