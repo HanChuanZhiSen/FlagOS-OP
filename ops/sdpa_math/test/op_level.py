@@ -62,6 +62,7 @@ def run(profile):
     from kernel.torch_level import sdpa_math_torch
     from kernel.p800_fast_level import sdpa_math_p800_fast
     from kernel.thead_fast_level import sdpa_math_thead_fast
+    from kernel.mlu590_fast_level import sdpa_math_mlu590_fast
     from reference import make_dropout_mask, sdpa_math_reference
     from register import register_a1
 
