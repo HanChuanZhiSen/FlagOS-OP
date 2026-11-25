@@ -144,10 +144,16 @@ def _fast_eligible(query, key, value, attn_mask, dropout_p, is_causal,
         if not (attn_mask.dtype == torch.bool
                 or attn_mask.dtype.is_floating_point):
             return False
-    if isinstance(scale, torch.Tensor):
+    # CNNL fused overrideable 的 qk_scale 必须 ∈ (0, 1]（实测报错：
+    # "qk_scale value 8 is not in valid range (0, 1]"）。scale > 1 时
+    # fallback 到 torch_level，避免 vendor 内部报错后返回 inf，触发
+    # _materialize_p 的残留 inf 检查。
+    if scale is not None:
         try:
-            float(scale)
+            s = float(scale)
         except Exception:
+            return False
+        if not (0.0 < s <= 1.0):
             return False
     return True
 
