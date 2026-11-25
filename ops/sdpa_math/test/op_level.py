@@ -172,9 +172,14 @@ def run(profile):
             check(f"MLU fast direct out/P: {dt_name}",
                   max(eo_f, ep_f) < 2e-2,
                   f"out={eo_f:.2e} P={ep_f:.2e}")
+            # bf16 只有 8 位尾数（eps≈3.9e-3），P 行和天然有 ~1e-3 量级
+            # 的量化偏差；这是数值精度，不是 P1-1 的回归（P1-1 的偏差是
+            # 25% 量级）。fp16 保持 1e-3 严格阈值，bf16 放宽到 5e-3。
+            row_sum_tol = 1e-3 if dt == torch.float16 else 5e-3
             check(f"MLU fast P row_sum: {dt_name}",
-                  bool(((rs - 1).abs() < 1e-3).all()),
-                  f"min={rs.min():.4f} max={rs.max():.4f}")
+                  bool(((rs - 1).abs() < row_sum_tol).all()),
+                  f"min={rs.min():.4f} max={rs.max():.4f} "
+                  f"tol={row_sum_tol:.0e}")
 
             n0 = ctr_main["n"]
             with torch.no_grad():
