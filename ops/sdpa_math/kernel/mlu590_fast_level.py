@@ -1,10 +1,18 @@
 """sdpa_math MLU590 (Cambricon) fast path: vendor fused overrideable + exact-P.
 
-实测结论（torch_mlu 1.34.1 / Neuware 4.7.6 / Driver 6.2.29）:
+实测结论（torch_mlu 1.33.1+torch2.11.0 / CNRT 7.7.2 / CNNL 2.2.14 /
+Driver 6.5.52）:
   - _scaled_dot_product_fused_attention_overrideable 返回 9-tuple，
-    [0]=O, [1]=LSE(shape=(B,Hq,Sq), dtype=fp32)，实测无 pad
-    (Sq=100 时 last dim=100)。
-  - LSE 语义 = 标准 logsumexp: P = exp(scale·QKᵀ − LSE)，max_abs_err≈1.2e-4。
+    [0]=O, [1]=LSE(shape=(B,Hq,Sq), dtype=fp32)，实测无 pad。
+  - LSE 语义 = 标准 logsumexp: P = exp(scale·QKᵀ + bias − LSE)。
+    分子必须加回与 vendor 调用一致的 additive bias，否则 P 行和 ≠ 1
+    （评审 P1-1 最小复现）。
+  - 半精度 QK 必须先升 FP32 再 matmul；FP16 下 D=64、q=k=40 时
+    未缩放 QK=102400 超 FP16 上限，先溢出再转 FP32 无法恢复
+    （评审 P1-2 最小复现）。
+  - qk_scale 必须 ∈ (0, 1]：scale > 1 时 vendor 报
+    "qk_scale value 8 is not in valid range (0, 1]"，内部返回 inf；
+    _fast_eligible 在入口拒绝，fallback 到 torch_level。
   - schema: (q,k,v, attn_bias=None, dropout_p=0., is_causal=False,
              return_debug_mask=False, *, scale=None)，无 enable_gqa。
 
