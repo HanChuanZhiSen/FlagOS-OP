@@ -44,20 +44,33 @@ def load_profile(name: str | None = None) -> LocalProfile:
     if name is None:
         name = os.environ.get("SDPA_MATH_PROFILE")
     if name is None:
+        # 与 detect_profile() 统一探测顺序: npu → ppu → mlu → xmlir/cuda → cpu。
+        # MLU 必须在 cuda 之前: MLU-only 环境下 torch.cuda.is_available()
+        # 返回 False，若先判 cuda 会误落到 cpu。
         try:
             import torch
             if hasattr(torch, "npu") and torch.npu.is_available():
                 name = "ascend910"
             elif _is_ppu_stack():
                 name = "thead-ppu"
-            elif torch.cuda.is_available():
-                try:
-                    import torch_xmlir  # noqa: F401
-                    name = "p800-kunlunxin"
-                except ImportError:
-                    name = "cpu"
             else:
-                name = "cpu"
+                _mlu_ok = False
+                try:
+                    import torch_mlu  # noqa: F401
+                    if hasattr(torch, "mlu") and torch.mlu.is_available():
+                        _mlu_ok = True
+                except ImportError:
+                    pass
+                if _mlu_ok:
+                    name = "mlu590"
+                elif torch.cuda.is_available():
+                    try:
+                        import torch_xmlir  # noqa: F401
+                        name = "p800-kunlunxin"
+                    except ImportError:
+                        name = "cpu"
+                else:
+                    name = "cpu"
         except Exception:
             name = "cpu"
     if name in ("ascend910", "ascend910b", "npu"):
