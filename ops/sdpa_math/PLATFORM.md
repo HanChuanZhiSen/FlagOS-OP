@@ -97,7 +97,7 @@ sdpa_math 必须物化第二输出 P，不能整体替换为 flash/efficient—�
   efficient 的 bool mask 转 additive `-inf` bias；16B stride 不齐走
   `_aligned_bias` 列 pad（报错原文与 bf16 验收见 sdpa PLATFORM §3c-4）。
 
-## 3b. mlu590 绑定（寒武纪 MLU590，vendor fused overrideable + exact-P）
+## 3b. mlu590 绑定（寒武纪 MLU590，fused overrideable + exact-P）
 
 环境锁定：`configs/env/mlu590.lock.yaml`（2026-09-23 采集：torch_mlu
 1.33.1+torch2.11.0 / CNRT 7.7.2 / CNNL 2.2.14 / Driver 6.2.29）。
@@ -126,7 +126,7 @@ vendor O/LSE + exact-P 补偿，新增 `kernel/mlu590_fast_level.py`。
 | fp32 / dropout_p>0 | 回退 torch_level（fast path 只承接半精度、dropout=0） |
 | direct requires_grad | 按设计 fallback torch_level（A1 forward 在 no_grad 下才走 fast path，backward 用数学实现） |
 | P 行和容差 | fp16 1e-3 / bf16 5e-3；overflow 场景放宽到 fp16 5e-3 / bf16 1e-2（score−LSE 的 FP32 大数相消带来 ~2e-3 偏差，浮点减法固有精度，不是 P1-2 回归） |
-| 性能 | `perf_fp16_mlu590.json`：fast path vs native math speedup **0.577–0.718×（自研更慢，如实保留）**。启用边界：fp16/bf16、dropout=0、scale∈(0,1]、causal 方阵、无 fp32 mask；其余回退 torch_level |
+| 性能 | `reports/perf_fp16_mlu590.json`：fast path vs native math speedup **0.577–0.718×（自研更慢，如实保留）**。启用边界：fp16/bf16、dropout=0、scale∈(0,1]、causal 方阵、无 fp32 mask；其余回退 torch_level |
 | 性能优化方向 | 当前慢因：`_materialize_p` 的 FP32 matmul + 逐元素 exp 未融合进 vendor kernel。方向：P 物化并入 vendor kernel 后处理，或用 Triton 写 fused PV（参考 p800_custom_triton 实验结论，MLU 待验证） |
 | 跨层一致性缺证 | 容器无 vLLM runtime（锁文件 `quirks.no_vllm_runtime=true`），框架层入口跳过。op 层拦截 + 注册=直调逐位覆盖 |
 
