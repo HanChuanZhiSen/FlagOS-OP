@@ -209,6 +209,50 @@ def run(profile):
               max(eo_d, ep_d) < 2e-2,
               f"out={eo_d:.2e} P={ep_d:.2e}")
 
+        # ── 3d) overflow 场景两路梯度（走 A1）──
+        # direct requires_grad 按设计 fallback torch，故走 A1：
+        # forward 在 no_grad 下用 fast path 拿 O/P，backward 数学实现。
+        # 检查 dO/dP 两路梯度有限且与 reference 一致。
+        for dt in (torch.float16, torch.bfloat16):
+            dt_name = str(dt).split(".")[-1]
+            D, scale = 64, 1.0 / 8.0
+            qg = torch.full((1, 4, 2, D), 40.0, dtype=dt, device=dev,
+                            requires_grad=True)
+            kg = torch.full((1, 4, 2, D), 40.0, dtype=dt, device=dev,
+                            requires_grad=True)
+            vg = torch.randn(1, 4, 2, D, dtype=dt, device=dev,
+                             requires_grad=True)
+            o_g, p_g = _op(qg, kg, vg, None, 0.0, False, None, scale=scale)
+            do = torch.randn_like(o_g)
+            dp = torch.randn_like(p_g)
+            go = torch.autograd.grad(o_g, (qg, kg, vg), do, retain_graph=True)
+            gp = torch.autograd.grad(p_g, (qg, kg, vg), dp)
+            check(f"MLU fast A1 overflow dO 有限: {dt_name}",
+                  all(bool(torch.isfinite(t).all()) for t in go))
+            check(f"MLU fast A1 overflow dP 有限: {dt_name}",
+                  all(bool(torch.isfinite(t).all()) for t in gp))
+
+            # reference 同 A1 模式（CPU 键 + torch impl）
+            qr = qg.detach().clone().requires_grad_(True)
+            kr = kg.detach().clone().requires_grad_(True)
+            vr = vg.detach().clone().requires_grad_(True)
+            r_out, r_p = sdpa_math_torch(qr, kr, vr, None, 0.0, False, None,
+                                          scale=scale)
+            gro = torch.autograd.grad(r_out, (qr, kr, vr), do,
+                                      retain_graph=True)
+            grp = torch.autograd.grad(r_p, (qr, kr, vr), dp,
+                                      allow_unused=True)
+            grp = tuple(torch.zeros_like(t) if x is None else x
+                        for x, t in zip(grp, (qr, kr, vr)))
+            e_go = max((a.float() - b.float()).abs().max().item()
+                       for a, b in zip(go, gro))
+            e_gp = max((a.float() - b.float()).abs().max().item()
+                       for a, b in zip(gp, grp))
+            check(f"MLU fast A1 overflow dO = reference: {dt_name}",
+                  e_go < 5e-2, f"max={e_go:.2e}")
+            check(f"MLU fast A1 overflow dP = reference: {dt_name}",
+                  e_gp < 5e-2, f"max={e_gp:.2e}")
+
     # ── 4) autograd: grad_fn + backward + 梯度 = 参考图反传 ──
     qa, ka, va, ma = _mk(1, 4, 4, 48, 48, dev, seed=3, mask="float")
     # float mask 与 causal 互斥（native 冲突规则，不论 mask 类型）
