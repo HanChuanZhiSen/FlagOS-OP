@@ -4,7 +4,8 @@
 > ops/embedding/MERGE.md 范式）。核心原则：**黄金/测试/注册链复用，
 > 只写 kernel 本体**。
 > 当前已合并: ascend910（Triton）、p800-kunlunxin（vendor O/LSE）、
-> thead-ppu（flash/efficient 分流 + exact-P）。
+> thead-ppu（flash/efficient 分流 + exact-P）、
+> mlu590（Cambricon fused overrideable + exact-P）。
 
 ## 七步流程
 
