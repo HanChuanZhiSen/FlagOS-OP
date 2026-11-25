@@ -142,6 +142,7 @@ def run(profile):
         "triton": sdpa_math_triton,
         "p800": sdpa_math_p800_fast,
         "thead": sdpa_math_thead_fast,
+        "mlu590": sdpa_math_mlu590_fast, 
     }.get(profile.default_impl, sdpa_math_torch)
     d_out, d_p = impl_fn(q, k, v, m, 0.0, False, None)
     check("A1 包装 = 直接调 impl（逐位）",
