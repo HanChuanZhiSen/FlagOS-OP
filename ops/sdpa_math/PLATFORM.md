@@ -97,6 +97,39 @@ sdpa_math 必须物化第二输出 P，不能整体替换为 flash/efficient—�
   efficient 的 bool mask 转 additive `-inf` bias；16B stride 不齐走
   `_aligned_bias` 列 pad（报错原文与 bf16 验收见 sdpa PLATFORM §3c-4）。
 
+## 3b. mlu590 绑定（寒武纪 MLU590，vendor fused overrideable + exact-P）
+
+环境锁定：`configs/env/mlu590.lock.yaml`（2026-09-23 采集：torch_mlu
+1.33.1+torch2.11.0 / CNRT 7.7.2 / CNNL 2.2.14 / Driver 6.2.29）。
+本次 P1 修复实测环境 Driver 6.5.52（其余与锁一致）。profile 显式
+`--device mlu590`，测试设备默认 `mlu:0`，`SDPA_MATH_TEST_DEVICE` 可覆盖。
+
+### 分叉判定（MERGE.md §0 → **结构级**）
+
+sdpa_math 必须物化第二输出 P，不能整体替换为 flash——与 p800 同构为
+vendor O/LSE + exact-P 补偿，新增 `kernel/mlu590_fast_level.py`。
+与 p800 的差异在 LSE 布局和 vendor 约束（见下表）。
+
+| 绑定项 | 结论 |
+|---|---|
+| 设备表现 | torch_mlu 张量 `device.type="mlu"`；守卫 `_has_mlu_stack()` 查 `torch_mlu` 可导入 |
+| 注册 key | **`AutogradPrivateUse1`**（同 torch_npu）。register_a1 成对注册 `AutogradPrivateUse1` + `PrivateUse1`，inference_mode 下两键缺一不可 |
+| 主实现 | `aten::_scaled_dot_product_fused_attention_overrideable`（CNNL FlashAttention v2），返回 9-tuple，[0]=O、[1]=LSE(B,Hq,Sq) fp32，**无 pad**（Sq=100 时 last dim=100） |
+| LSE 语义 | 标准 logsumexp，**含 attn_bias**。P = exp(scale·QKᵀ + bias − LSE)，分子必须加回与 vendor 调用一致的 bias（评审 P1-1） |
+| 半精度 QK 溢出 | `matmul(query, key^T)` 必须先升 FP32。FP16 下 D=64、q=k=40 时未缩放 QK=102400 超 FP16 上限（评审 P1-2） |
+| qk_scale 范围 | **必须 ∈ (0, 1]**。scale > 1 时 vendor 报 `qk_scale value 8 is not in valid range (0, 1]`，内部返回 inf。`_fast_eligible` 入口拒绝，fallback 到 torch_level |
+| GQA | fused overrideable 无 `enable_gqa` → `repeat_interleave` 扩 KV |
+| causal 且 Sq≠Skv | fused overrideable 语义不匹配 aten math → 回退 torch_level |
+| causal + attn_mask | sdpa_math 全局约束禁止并存（`_validate` 抛 `CAUSAL_MASK_CONFLICT`），`mlu590_fast_level.py` 里那段折叠代码在当前契约下不会执行 |
+| bool mask | `_to_bias` 转 additive `-inf`，vendor 不接受 bool |
+| 全遮蔽行 | aten math 语义 out=0/P=0（不是 NaN），vendor 可能返回有限值 → 显式 `masked_fill(0)` |
+| fp32 / dropout_p>0 | 回退 torch_level（fast path 只承接半精度、dropout=0） |
+| direct requires_grad | 按设计 fallback torch_level（A1 forward 在 no_grad 下才走 fast path，backward 用数学实现） |
+| P 行和容差 | fp16 1e-3 / bf16 5e-3；overflow 场景放宽到 fp16 5e-3 / bf16 1e-2（score−LSE 的 FP32 大数相消带来 ~2e-3 偏差，浮点减法固有精度，不是 P1-2 回归） |
+| 性能 | `perf_fp16_mlu590.json`：fast path vs native math speedup **0.577–0.718×（自研更慢，如实保留）**。启用边界：fp16/bf16、dropout=0、scale∈(0,1]、causal 方阵、无 fp32 mask；其余回退 torch_level |
+| 性能优化方向 | 当前慢因：`_materialize_p` 的 FP32 matmul + 逐元素 exp 未融合进 vendor kernel。方向：P 物化并入 vendor kernel 后处理，或用 Triton 写 fused PV（参考 p800_custom_triton 实验结论，MLU 待验证） |
+| 跨层一致性缺证 | 容器无 vLLM runtime（锁文件 `quirks.no_vllm_runtime=true`），框架层入口跳过。op 层拦截 + 注册=直调逐位覆盖 |
+
 ## 4. 新平台接入
 
 参照 `ops/sdpa/MERGE.md` 七步流程（本算子暂无独立 MERGE.md，结构
