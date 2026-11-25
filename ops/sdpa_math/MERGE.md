@@ -13,7 +13,8 @@
    `script/check_accuracy.py`——不过黄金不谈合并
 2. **kernel 本体**: `kernel/<platform>_level.py`（现有：
    `triton_level.py` ascend910 路线 / `p800_fast_level.py` vendor 路线 /
-   `thead_fast_level.py` thead 分流路线）
+   `thead_fast_level.py` thead 分流路线 /
+   `mlu590_fast_level.py` Cambricon fused overrideable 路线）
 3. **register 平台分发**: `register.py` 的 `_fwd`/backend 选择加平台
    分支（含 `_DEVICE_PROBE` 能力守卫参考 ops/embedding）
 4. **_profile 探测链**: 平台 try-import 段（对齐 sdpa/embedding 顺序）
@@ -32,4 +33,5 @@
 ## 绑定速查
 
 见 [PLATFORM.md](PLATFORM.md)（ascend910 64×64 tile 上限 / p800
-vendor O/LSE + exact-P / thead flash·efficient 分流 + LSE pad 切片）。
+vendor O/LSE + exact-P / thead flash·efficient 分流 + LSE pad 切片 /
+mlu590 fused overrideable + exact-P，含 qk_scale ∈ (0,1] 约束）。
